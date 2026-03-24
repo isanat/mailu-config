@@ -1,0 +1,198 @@
+# ============================================
+# MAILU - Servidor de Email Completo
+# Dominio: travelconcierge.site
+# IP: 164.68.126.14
+# ============================================
+# Versão: 2024.06
+# ============================================
+
+version: '3.8'
+
+services:
+  # ==========================================
+  # FRONT - Proxy Reverso e Frontend
+  # ==========================================
+  front:
+    image: ghcr.io/mailu/nginx:2024.06
+    restart: always
+    env_file: mailu.env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "25:25"
+      - "465:465"
+      - "587:587"
+      - "993:993"
+      - "995:995"
+    volumes:
+      - "./certs:/certs"
+      - "./overrides/nginx:/overrides:ro"
+    networks:
+      - mailu
+    depends_on:
+      - resolver
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ==========================================
+  # RESOLVER - DNS Interno
+  # ==========================================
+  resolver:
+    image: ghcr.io/mailu/unbound:2024.06
+    restart: always
+    env_file: mailu.env
+    networks:
+      mailu:
+        ipv4_address: 192.168.203.254
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ==========================================
+  # SMTP - Postfix (Envio de Emails)
+  # ==========================================
+  smtp:
+    image: ghcr.io/mailu/postfix:2024.06
+    restart: always
+    env_file: mailu.env
+    volumes:
+      - "./mailqueue:/queue"
+      - "./overrides/postfix:/overrides:ro"
+    networks:
+      - mailu
+    depends_on:
+      - front
+      - resolver
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ==========================================
+  # IMAP - Dovecot (Recebimento de Emails)
+  # ==========================================
+  imap:
+    image: ghcr.io/mailu/dovecot:2024.06
+    restart: always
+    env_file: mailu.env
+    volumes:
+      - "./mail:/mail"
+      - "./overrides/dovecot:/overrides:ro"
+    networks:
+      - mailu
+    depends_on:
+      - front
+      - resolver
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ==========================================
+  # ANTISPAM - Rspamd
+  # ==========================================
+  antispam:
+    image: ghcr.io/mailu/rspamd:2024.06
+    restart: always
+    env_file: mailu.env
+    volumes:
+      - "./filter:/var/lib/rspamd"
+      - "./overrides/rspamd:/overrides:ro"
+    networks:
+      - mailu
+    depends_on:
+      - front
+      - resolver
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ==========================================
+  # ANTIVIRUS - ClamAV
+  # ==========================================
+  antivirus:
+    image: ghcr.io/mailu/clamav:2024.06
+    restart: always
+    env_file: mailu.env
+    volumes:
+      - "./clamav:/data"
+    networks:
+      - mailu
+    depends_on:
+      - resolver
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ==========================================
+  # WEBMAIL - SnappyMail
+  # ==========================================
+  webmail:
+    image: ghcr.io/mailu/webmail:2024.06
+    restart: always
+    env_file: mailu.env
+    volumes:
+      - "./webmail:/data"
+      - "./overrides/webmail:/overrides:ro"
+    networks:
+      - mailu
+    depends_on:
+      - imap
+      - resolver
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ==========================================
+  # ADMIN - Painel de Administração
+  # ==========================================
+  admin:
+    image: ghcr.io/mailu/admin:2024.06
+    restart: always
+    env_file: mailu.env
+    volumes:
+      - "./data:/data"
+      - "./dkim:/dkim"
+    networks:
+      - mailu
+    depends_on:
+      - redis
+      - resolver
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # ==========================================
+  # REDIS - Cache
+  # ==========================================
+  redis:
+    image: redis:alpine
+    restart: always
+    volumes:
+      - "./redis:/data"
+    networks:
+      - mailu
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ==========================================
+  # WATCHTOWER - Auto-Update (Opcional)
+  # ==========================================
+  watchtower:
+    image: containrrr/watchtower
+    restart: always
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=86400
+      - WATCHTOWER_LABEL_ENABLE=true
+    networks:
+      - mailu
+
+networks:
+  mailu:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 192.168.203.0/24
